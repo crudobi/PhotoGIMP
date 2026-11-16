@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
+import re
 import stat
 import zipfile
 
@@ -14,6 +15,27 @@ CONFIG_ROOT = ROOT / ".config" / "GIMP"
 LINUX_DESKTOP = ROOT / ".local" / "share" / "applications" / "org.gimp.GIMP.desktop"
 LINUX_ICONS = ROOT / ".local" / "share" / "icons"
 FIXED_TIME = (2020, 1, 1, 0, 0, 0)
+
+# Photoshop-alignment shortcuts (branch photoshop-alignment). These are the
+# bindings the fork promises over stock GIMP/PhotoGIMP, and the build FAILS
+# if any of them is missing or changed in the packaged shortcutsrc, so a
+# bad merge can never ship a zip without them. Keys are the exact quoted
+# accelerator strings from the (action ...) line, in order.
+#   Ctrl+E merge down / Ctrl+Shift+E merge visible / Ctrl+Shift+I invert
+#   selection / Ctrl+Shift+Z redo / Ctrl+M curves / Ctrl+1 100% zoom /
+#   Ctrl+I invert image (perceptual; Colors > Invert is three GEGL ops and
+#   the plain Invert is filters-invert-perceptual).
+PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
+    "layers-merge-down": ("<Primary>e",),
+    "image-merge-layers": ("<Primary><Shift>e",),
+    "select-invert": ("<Primary><Shift>i",),
+    "edit-redo": ("<Primary><Shift>z",),
+    "tools-curves": ("<Primary>m",),
+    "view-zoom-1-1": ("<Primary>1", "1", "KP_1"),
+    "filters-invert-perceptual": ("<Primary>i",),
+}
+
+_ACTION_RE = re.compile(r'^\(action "([^"]+)"((?: "[^"]*")*)\)\s*$')
 
 
 def discover_config() -> tuple[str, Path]:
@@ -41,6 +63,41 @@ def add_tree(archive: zipfile.ZipFile, source: Path, destination: str) -> None:
         add_file(archive, file, f"{destination}/{file.relative_to(source).as_posix()}")
 
 
+def parse_shortcuts(text: str) -> dict[str, tuple[str, ...]]:
+    """Active (uncommented) bindings from a shortcutsrc file."""
+    found: dict[str, tuple[str, ...]] = {}
+    for line in text.splitlines():
+        match = _ACTION_RE.match(line.strip())
+        if match:
+            keys = tuple(re.findall(r'"([^"]*)"', match.group(2)))
+            found[match.group(1)] = keys
+    return found
+
+
+def verify_photoshop_shortcuts(archive_path: Path, shortcuts_entry: str) -> None:
+    """Fail unless the packaged shortcutsrc carries every Photoshop binding.
+
+    Reads the shortcutsrc back out of the finished archive, so this gates
+    the actual build output, not just the source tree.
+    """
+    with zipfile.ZipFile(archive_path) as archive:
+        try:
+            text = archive.read(shortcuts_entry).decode("utf-8")
+        except KeyError:
+            raise SystemExit(f"{archive_path.name}: missing {shortcuts_entry} in archive")
+    found = parse_shortcuts(text)
+    problems = []
+    for action, expected in PHOTOSHOP_SHORTCUTS.items():
+        if action not in found:
+            problems.append(f"{action}: missing (expected {list(expected)})")
+        elif found[action] != expected:
+            problems.append(f"{action}: got {list(found[action])}, expected {list(expected)}")
+    if problems:
+        detail = "; ".join(problems)
+        raise SystemExit(f"{archive_path.name}: Photoshop shortcuts check FAILED: {detail}")
+    print(f"{archive_path.name}: Photoshop shortcuts OK ({len(PHOTOSHOP_SHORTCUTS)} bindings)")
+
+
 def build_archive(output: Path, platform: str, version: str, config: Path) -> None:
     with zipfile.ZipFile(output, "w") as archive:
         if platform == "linux":
@@ -51,8 +108,11 @@ def build_archive(output: Path, platform: str, version: str, config: Path) -> No
             installer = ROOT / "install.sh"
             if installer.exists():
                 add_file(archive, installer, f"{prefix}/install.sh")
+            shortcuts_entry = f"{prefix}/.config/GIMP/{version}/shortcutsrc"
         else:
             add_tree(archive, config, version)
+            shortcuts_entry = f"{version}/shortcutsrc"
+    verify_photoshop_shortcuts(output, shortcuts_entry)
 
 
 def main() -> None:
