@@ -1137,3 +1137,4 @@
 # (action "edit-paste-as-new-image" "<Primary><Shift>v" "<Shift>Paste")
 # (action "script-fu-font-map")
 # end of shortcutsrc
+(action "photogimp-layer-via-copy" "<Primary><Alt>j")

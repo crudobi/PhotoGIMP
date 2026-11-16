@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 import re
 import stat
@@ -24,7 +25,9 @@ FIXED_TIME = (2020, 1, 1, 0, 0, 0)
 #   Ctrl+E merge down / Ctrl+Shift+E merge visible / Ctrl+Shift+I invert
 #   selection / Ctrl+Shift+Z redo / Ctrl+M curves / Ctrl+1 100% zoom /
 #   Ctrl+I invert image (perceptual; Colors > Invert is three GEGL ops and
-#   the plain Invert is filters-invert-perceptual).
+#   the plain Invert is filters-invert-perceptual) / Ctrl+Alt+J Layer via
+#   Copy (user-defined action from photogimp-actions.json, registered by
+#   the photogimp-actions plug-in).
 PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "layers-merge-down": ("<Primary>e",),
     "image-merge-layers": ("<Primary><Shift>e",),
@@ -33,6 +36,7 @@ PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "tools-curves": ("<Primary>m",),
     "view-zoom-1-1": ("<Primary>1", "1", "KP_1"),
     "filters-invert-perceptual": ("<Primary>i",),
+    "photogimp-layer-via-copy": ("<Primary><Alt>j",),
 }
 
 _ACTION_RE = re.compile(r'^\(action "([^"]+)"((?: "[^"]*")*)\)\s*$')
@@ -60,6 +64,9 @@ def add_file(archive: zipfile.ZipFile, source: Path, destination: str) -> None:
 
 def add_tree(archive: zipfile.ZipFile, source: Path, destination: str) -> None:
     for file in iter_files(source):
+        # Never ship editor/sync backups (e.g. shortcutsrc.bak-<timestamp>).
+        if ".bak-" in file.name or file.name.endswith(".bak"):
+            continue
         add_file(archive, file, f"{destination}/{file.relative_to(source).as_posix()}")
 
 
@@ -98,6 +105,59 @@ def verify_photoshop_shortcuts(archive_path: Path, shortcuts_entry: str) -> None
     print(f"{archive_path.name}: Photoshop shortcuts OK ({len(PHOTOSHOP_SHORTCUTS)} bindings)")
 
 
+def verify_actions_file(archive_path: Path, json_entry: str, loader_entry: str) -> None:
+    """Fail unless the packaged user-defined actions are valid and wired up.
+
+    Reads photogimp-actions.json back out of the finished archive, validates
+    its schema, checks every action's shortcut agrees with the shortcuts
+    gate (so the JSON, the shortcutsrc, and this file cannot drift apart),
+    and checks the loader plug-in is present and executable (GIMP ignores
+    a plug-in file without the executable bit).
+    """
+    with zipfile.ZipFile(archive_path) as archive:
+        try:
+            data = json.loads(archive.read(json_entry).decode("utf-8"))
+        except KeyError:
+            raise SystemExit(f"{archive_path.name}: missing {json_entry} in archive")
+        try:
+            info = archive.getinfo(loader_entry)
+        except KeyError:
+            raise SystemExit(f"{archive_path.name}: missing {loader_entry} in archive")
+        loader = archive.read(loader_entry)
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise SystemExit(f"{archive_path.name}: {json_entry} has an unsupported format")
+    actions = data.get("actions", [])
+    if not actions:
+        raise SystemExit(f"{archive_path.name}: {json_entry} defines no actions")
+    for action in actions:
+        if not isinstance(action, dict):
+            raise SystemExit(f"{archive_path.name}: {json_entry} has a non-object action")
+        action_id = action.get("id", "")
+        if not re.fullmatch(r"[a-z0-9-]+", action_id):
+            raise SystemExit(f"{archive_path.name}: invalid action id {action_id!r}")
+        for field in ("label", "menu", "shortcut"):
+            if not action.get(field):
+                raise SystemExit(f"{archive_path.name}: action {action_id!r} has no {field}")
+        steps = action.get("steps", [])
+        if not steps:
+            raise SystemExit(f"{archive_path.name}: action {action_id!r} has no steps")
+        for step in steps:
+            if not isinstance(step, dict) or not step.get("procedure") \
+                    or not isinstance(step.get("args", {}), dict):
+                raise SystemExit(f"{archive_path.name}: action {action_id!r} has a bad step")
+        proc = f"photogimp-{action_id}"
+        expected = (action["shortcut"],)
+        if PHOTOSHOP_SHORTCUTS.get(proc) != expected:
+            raise SystemExit(f"{archive_path.name}: action {proc} shortcut {expected} "
+                             f"does not match the shortcuts gate {PHOTOSHOP_SHORTCUTS.get(proc)}")
+    mode = (info.external_attr >> 16) & 0xFFFF
+    if not mode & 0o111:
+        raise SystemExit(f"{archive_path.name}: {loader_entry} is not executable (mode {oct(mode)})")
+    if not loader.startswith(b"#!/usr/bin/env python3"):
+        raise SystemExit(f"{archive_path.name}: {loader_entry} is missing its python3 shebang")
+    print(f"{archive_path.name}: user-defined actions OK ({len(actions)} action(s), loader executable)")
+
+
 def build_archive(output: Path, platform: str, version: str, config: Path) -> None:
     with zipfile.ZipFile(output, "w") as archive:
         if platform == "linux":
@@ -108,11 +168,19 @@ def build_archive(output: Path, platform: str, version: str, config: Path) -> No
             installer = ROOT / "install.sh"
             if installer.exists():
                 add_file(archive, installer, f"{prefix}/install.sh")
+            sync_script = ROOT / "scripts" / "sync-actions.py"
+            if sync_script.exists():
+                add_file(archive, sync_script, f"{prefix}/scripts/sync-actions.py")
             shortcuts_entry = f"{prefix}/.config/GIMP/{version}/shortcutsrc"
+            json_entry = f"{prefix}/.config/GIMP/{version}/photogimp-actions.json"
+            loader_entry = f"{prefix}/.config/GIMP/{version}/plug-ins/photogimp-actions/photogimp-actions.py"
         else:
             add_tree(archive, config, version)
             shortcuts_entry = f"{version}/shortcutsrc"
+            json_entry = f"{version}/photogimp-actions.json"
+            loader_entry = f"{version}/plug-ins/photogimp-actions/photogimp-actions.py"
     verify_photoshop_shortcuts(output, shortcuts_entry)
+    verify_actions_file(output, json_entry, loader_entry)
 
 
 def main() -> None:

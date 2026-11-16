@@ -245,6 +245,14 @@ cp -a "$GIMP_CONFIG" "$BACKUP/"
 echo "Installing PhotoGIMP config into $GIMP_CONFIG..."
 cp -a "$CONFIG_SRC"/. "$GIMP_CONFIG"/
 
+# Sync user-defined action shortcuts from photogimp-actions.json into
+# shortcutsrc (best effort: the shipped shortcutsrc already carries the
+# bindings, so a sync failure only warns).
+if [ -f "$SCRIPT_DIR/scripts/sync-actions.py" ]; then
+	python3 "$SCRIPT_DIR/scripts/sync-actions.py" --config "$GIMP_CONFIG" \
+		|| echo "WARNING: PhotoGIMP action shortcuts were not synced. Run: python3 $SCRIPT_DIR/scripts/sync-actions.py --config '$GIMP_CONFIG'"
+fi
+
 # Only install desktop file and icons for flatpak
 if [ "$GIMP_SOURCE" = "flatpak" ]; then
 	DESKTOP_SRC="$SCRIPT_DIR/.local/share/applications/org.gimp.GIMP.desktop"
