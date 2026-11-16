@@ -63,6 +63,7 @@
 (action "edit-redo" "<Primary><Shift>z")
 (action "tools-curves" "<Primary>m")
 (action "view-zoom-1-1" "<Primary>1" "1" "KP_1")
+(action "filters-invert-perceptual" "<Primary>i")
 
 # INACTIVE
 # (action "file-export")
