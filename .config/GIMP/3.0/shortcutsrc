@@ -375,7 +375,7 @@
 # (action "script-fu-paste-as-pattern")
 # (action "view-rotate-reset")
 # (action "view-scroll-center" "<Shift>j")
-# (action "dialogs-layers" "<Primary>l")
+(action "dialogs-layers")
 # (action "tools-force-decrease-skip")
 # (action "view-reset" "exclam")
 # (action "layers-mode-previous")
