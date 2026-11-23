@@ -23,17 +23,23 @@ FIXED_TIME = (2020, 1, 1, 0, 0, 0)
 # bad merge can never ship a zip without them. Keys are the exact quoted
 # accelerator strings from the (action ...) line, in order.
 #   Ctrl+E merge down / Ctrl+Shift+E merge visible / Ctrl+Shift+I invert
-#   selection / Ctrl+Shift+Z redo / Ctrl+M curves / Ctrl+1 100% zoom /
-#   Ctrl+I invert image (perceptual; Colors > Invert is three GEGL ops and
-#   the plain Invert is filters-invert-perceptual) / Ctrl+Alt+J Layer via
-#   Copy (user-defined action from photogimp-actions.json, registered by
-#   the photogimp-actions plug-in).
+#   selection / Ctrl+Shift+Z redo / Ctrl+L levels / Ctrl+M curves /
+#   Ctrl+1 100% zoom / Ctrl+I invert image (perceptual; Colors > Invert
+#   is three GEGL ops and the plain Invert is filters-invert-perceptual) /
+#   Ctrl+Alt+J Layer via Copy (user-defined action from
+#   photogimp-actions.json, registered by the photogimp-actions plug-in).
+#   Levels/Curves are the filters-* GEGL actions, which open the dialogs;
+#   the tools-* actions only select the tool, so tools-levels/tools-curves
+#   are asserted keyless below.
 PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "layers-merge-down": ("<Primary>e",),
     "image-merge-layers": ("<Primary><Shift>e",),
     "select-invert": ("<Primary><Shift>i",),
     "edit-redo": ("<Primary><Shift>z",),
-    "tools-curves": ("<Primary>m",),
+    "tools-curves": (),
+    "tools-levels": (),
+    "filters-curves": ("<Primary>m",),
+    "filters-levels": ("<Primary>l",),
     "view-zoom-1-1": ("<Primary>1", "1", "KP_1"),
     "filters-invert-perceptual": ("<Primary>i",),
     "photogimp-layer-via-copy": ("<Primary><Alt>j",),
