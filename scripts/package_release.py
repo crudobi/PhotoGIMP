@@ -28,6 +28,11 @@ FIXED_TIME = (2020, 1, 1, 0, 0, 0)
 #   is three GEGL ops and the plain Invert is filters-invert-perceptual) /
 #   Ctrl+Alt+J Layer via Copy (user-defined action from
 #   photogimp-actions.json, registered by the photogimp-actions plug-in).
+#   Ctrl+]/Ctrl+[ raise/lower layer / Ctrl+Shift+]/Ctrl+Shift+[ to
+#   top/bottom / Alt+]/Alt+[ select next/previous layer.
+#   (Ctrl+Shift+[ / ] use the shifted keysyms braceleft/braceright:
+#   GTK matches a real Ctrl+Shift+[ press as braceleft, so the
+#   bracketleft spelling never fires -- see the fork shortcutsrc.)
 #   Levels/Curves are the filters-* GEGL actions, which open the dialogs;
 #   the tools-* actions only select the tool, so tools-levels/tools-curves
 #   are asserted keyless below.
@@ -43,6 +48,12 @@ PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "view-zoom-1-1": ("<Primary>1", "1", "KP_1"),
     "filters-invert-perceptual": ("<Primary>i",),
     "photogimp-layer-via-copy": ("<Primary><Alt>j",),
+    "layers-raise": ("<Primary>bracketright",),
+    "layers-lower": ("<Primary>bracketleft",),
+    "layers-raise-to-top": ("<Primary><Shift>braceright",),
+    "layers-lower-to-bottom": ("<Primary><Shift>braceleft",),
+    "layers-select-next": ("<Alt>bracketright",),
+    "layers-select-previous": ("<Alt>bracketleft",),
 }
 
 _ACTION_RE = re.compile(r'^\(action "([^"]+)"((?: "[^"]*")*)\)\s*$')
