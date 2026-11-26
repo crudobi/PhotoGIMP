@@ -30,6 +30,7 @@ FIXED_TIME = (2020, 1, 1, 0, 0, 0)
 #   photogimp-actions.json, registered by the photogimp-actions plug-in).
 #   Ctrl+]/Ctrl+[ raise/lower layer / Ctrl+Shift+]/Ctrl+Shift+[ to
 #   top/bottom / Alt+]/Alt+[ select next/previous layer.
+#   u cycles the layer scope (Current / All visible / Selected).
 #   (Ctrl+Shift+[ / ] use the shifted keysyms braceleft/braceright:
 #   GTK matches a real Ctrl+Shift+[ press as braceleft, so the
 #   bracketleft spelling never fires -- see the fork shortcutsrc.)
@@ -56,6 +57,7 @@ PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "layers-select-previous": ("<Alt>bracketleft",),
     "tools-transform-again": ("<Primary><Shift>t",),
     "tools-transform-duplicate": ("<Primary><Alt>t",),
+    "tools-layer-scope-cycle": ("u",),
 }
 
 _ACTION_RE = re.compile(r'^\(action "([^"]+)"((?: "[^"]*")*)\)\s*$')

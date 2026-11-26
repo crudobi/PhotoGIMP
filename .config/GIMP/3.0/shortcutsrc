@@ -19,6 +19,7 @@
 (action "tools-unified-transform" "<Primary>t")
 (action "tools-transform-again" "<Primary><Shift>t")
 (action "tools-transform-duplicate" "<Primary><Alt>t")
+(action "tools-layer-scope-cycle" "u")
 (action "layers-merge-down" "<Primary>e")
 (action "image-merge-layers" "<Primary><Shift>e")
 (action "image-resize" "<Primary><Alt>c")
