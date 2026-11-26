@@ -54,6 +54,8 @@ PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
     "layers-lower-to-bottom": ("<Primary><Shift>braceleft",),
     "layers-select-next": ("<Alt>bracketright",),
     "layers-select-previous": ("<Alt>bracketleft",),
+    "tools-transform-again": ("<Primary><Shift>t",),
+    "tools-transform-duplicate": ("<Primary><Alt>t",),
 }
 
 _ACTION_RE = re.compile(r'^\(action "([^"]+)"((?: "[^"]*")*)\)\s*$')
