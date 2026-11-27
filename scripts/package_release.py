@@ -8,7 +8,10 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import stat
+import subprocess
+import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,6 +65,12 @@ PHOTOSHOP_SHORTCUTS: dict[str, tuple[str, ...]] = {
 
 _ACTION_RE = re.compile(r'^\(action "([^"]+)"((?: "[^"]*")*)\)\s*$')
 
+# Headless PDB verification (see verify_pdb_procedures): the dev GIMP is
+# probed with python-fu-eval, which only exists in GIMP 3. A missing
+# binary warns and skips; any other failure fails the build (fail-closed).
+# Runs measured on kaw at ~1-2s wall; the timeout only bounds a hung GIMP.
+PDB_CHECK_TIMEOUT_SECONDS = 120
+
 
 def discover_config() -> tuple[str, Path]:
     versions = sorted(path for path in CONFIG_ROOT.iterdir() if path.is_dir())
@@ -102,11 +111,36 @@ def parse_shortcuts(text: str) -> dict[str, tuple[str, ...]]:
     return found
 
 
+def find_shortcut_collisions(found: dict[str, tuple[str, ...]]) -> list[str]:
+    """Chords bound by more than one action.
+
+    `found` is the parsed shortcutsrc (see parse_shortcuts): every active
+    line, not just the Photoshop gate entries, so a stock binding that
+    steals a gate chord fails the build too. Decision, documented:
+    a chord repeated within ONE action's own line is NOT a collision --
+    the action still owns that chord exactly once (deduped per line).
+    A chord bound by two DIFFERENT actions is a collision. Keyless
+    actions bind no chords and cannot collide. Commented-out lines
+    never reach here: parse_shortcuts only matches lines starting with
+    `(action`. Returns one message per colliding chord, naming the
+    chord and both actions, in file order.
+    """
+    owner: dict[str, str] = {}
+    collisions: list[str] = []
+    for action, keys in found.items():
+        for chord in dict.fromkeys(keys):
+            previous = owner.setdefault(chord, action)
+            if previous != action:
+                collisions.append(f"{chord!r} bound by both {previous} and {action}")
+    return collisions
+
+
 def verify_photoshop_shortcuts(archive_path: Path, shortcuts_entry: str) -> None:
     """Fail unless the packaged shortcutsrc carries every Photoshop binding.
 
     Reads the shortcutsrc back out of the finished archive, so this gates
-    the actual build output, not just the source tree.
+    the actual build output, not just the source tree. Also fails if any
+    chord is bound by more than one action (see find_shortcut_collisions).
     """
     with zipfile.ZipFile(archive_path) as archive:
         try:
@@ -120,10 +154,103 @@ def verify_photoshop_shortcuts(archive_path: Path, shortcuts_entry: str) -> None
             problems.append(f"{action}: missing (expected {list(expected)})")
         elif found[action] != expected:
             problems.append(f"{action}: got {list(found[action])}, expected {list(expected)}")
+    problems.extend(
+        f"chord collision: {message}" for message in find_shortcut_collisions(found)
+    )
     if problems:
         detail = "; ".join(problems)
         raise SystemExit(f"{archive_path.name}: Photoshop shortcuts check FAILED: {detail}")
     print(f"{archive_path.name}: Photoshop shortcuts OK ({len(PHOTOSHOP_SHORTCUTS)} bindings)")
+
+
+def _pdb_probe_source(procedures: list[str]) -> str:
+    """Python source for the headless PDB existence probe.
+
+    Run inside GIMP 3 via python-fu-eval (see verify_pdb_procedures).
+    Prints one `PDB-CHECK <name> FOUND|MISSING` line per procedure to
+    stdout. `Gimp.get_pdb().lookup_procedure` returns None for an
+    unknown procedure, so a missing procedure is a real MISSING line,
+    not an exception -- and the gate treats a probe that prints no (or
+    incomplete) lines as unverifiable, never as a pass.
+    """
+    wanted = json.dumps(sorted(set(procedures)))
+    return (
+        "from gi.repository import Gimp\n"
+        "pdb = Gimp.get_pdb()\n"
+        f"for _name in {wanted}:\n"
+        "    _proc = pdb.lookup_procedure(_name)\n"
+        "    print('PDB-CHECK %s %s' % (_name, 'FOUND' if _proc is not None else 'MISSING'), flush=True)\n"
+    )
+
+
+def verify_pdb_procedures(archive_path: Path, procedures: list[str]) -> None:
+    """Fail unless every PDB procedure named by the actions exists.
+
+    Runs headless GIMP 3 (gimp-dev on this box) with python-fu-eval and
+    looks each procedure up in the PDB. Proven reliable on kaw
+    (2026-11-27): the lookup prints FOUND for real procedures and
+    MISSING for a bogus name, exits 0 in ~1-2s, and repeats
+    deterministically. Two flags are load-bearing: --quit (without it
+    GIMP backgrounds itself after the batch and never exits -- a hung
+    build) and --new-instance (without it the batch could be routed
+    into the user's running GUI GIMP). A timeout bounds a hung GIMP.
+    The Script-Fu route was tried first and rejected:
+    gimp-procedural-db-query is unbound in GIMP 3.2, and a failing
+    Script-Fu batch command leaves GIMP hung until killed.
+    If no GIMP binary is present at all, this WARNS and skips: the
+    gate must not fail a build on a box without GIMP. Any other
+    failure (timeout, non-zero exit, incomplete output) FAILS the
+    build: a verification that could not run must never silently pass.
+    """
+    if not procedures:
+        return
+    wanted = sorted(set(procedures))
+    gimp = shutil.which("gimp-dev") or shutil.which("gimp")
+    if gimp is None:
+        print(f"{archive_path.name}: PDB procedures check SKIPPED (no GIMP binary found)")
+        return
+    with tempfile.NamedTemporaryFile("w", suffix=".py", prefix="photogimp-pdb-probe-", delete=False) as probe_file:
+        probe_file.write(_pdb_probe_source(wanted))
+        probe_path = probe_file.name
+    try:
+        batch = "exec(open(%s).read())" % json.dumps(probe_path)
+        result = subprocess.run(
+            [gimp, "--no-interface", "--new-instance", "--quit",
+             "--batch-interpreter", "python-fu-eval", "-b", batch],
+            capture_output=True, text=True, timeout=PDB_CHECK_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError:
+        print(f"{archive_path.name}: PDB procedures check SKIPPED (GIMP binary vanished: {gimp})")
+        return
+    except subprocess.TimeoutExpired:
+        raise SystemExit(
+            f"{archive_path.name}: PDB procedures check FAILED: GIMP timed out "
+            f"after {PDB_CHECK_TIMEOUT_SECONDS}s while looking up {wanted}"
+        )
+    finally:
+        Path(probe_path).unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise SystemExit(
+            f"{archive_path.name}: PDB procedures check FAILED: GIMP exited "
+            f"{result.returncode} while looking up {wanted}"
+        )
+    found: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if line.startswith("PDB-CHECK "):
+            parts = line.split()
+            if len(parts) == 3:
+                found[parts[1]] = parts[2]
+    if set(found) != set(wanted):
+        raise SystemExit(
+            f"{archive_path.name}: PDB procedures check FAILED: incomplete probe "
+            f"output (got {sorted(found)} for {wanted})"
+        )
+    missing = [name for name in wanted if found[name] != "FOUND"]
+    if missing:
+        raise SystemExit(
+            f"{archive_path.name}: PDB procedures check FAILED: unknown procedure(s): {', '.join(missing)}"
+        )
+    print(f"{archive_path.name}: PDB procedures OK ({len(wanted)} procedure(s))")
 
 
 def verify_actions_file(archive_path: Path, json_entry: str, loader_entry: str) -> None:
@@ -150,6 +277,7 @@ def verify_actions_file(archive_path: Path, json_entry: str, loader_entry: str) 
     actions = data.get("actions", [])
     if not actions:
         raise SystemExit(f"{archive_path.name}: {json_entry} defines no actions")
+    procedures: list[str] = []
     for action in actions:
         if not isinstance(action, dict):
             raise SystemExit(f"{archive_path.name}: {json_entry} has a non-object action")
@@ -166,6 +294,7 @@ def verify_actions_file(archive_path: Path, json_entry: str, loader_entry: str) 
             if not isinstance(step, dict) or not step.get("procedure") \
                     or not isinstance(step.get("args", {}), dict):
                 raise SystemExit(f"{archive_path.name}: action {action_id!r} has a bad step")
+            procedures.append(step["procedure"])
         proc = f"photogimp-{action_id}"
         expected = (action["shortcut"],)
         if PHOTOSHOP_SHORTCUTS.get(proc) != expected:
@@ -176,6 +305,7 @@ def verify_actions_file(archive_path: Path, json_entry: str, loader_entry: str) 
         raise SystemExit(f"{archive_path.name}: {loader_entry} is not executable (mode {oct(mode)})")
     if not loader.startswith(b"#!/usr/bin/env python3"):
         raise SystemExit(f"{archive_path.name}: {loader_entry} is missing its python3 shebang")
+    verify_pdb_procedures(archive_path, procedures)
     print(f"{archive_path.name}: user-defined actions OK ({len(actions)} action(s), loader executable)")
 
 
